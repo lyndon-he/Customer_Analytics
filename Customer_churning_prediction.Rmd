@@ -1,5 +1,5 @@
 ---
-title: "hw7 churn"
+title: "Using different models to predict customers' churning"
 author: "Lyndon He"
 date: "4/4/2020"
 output: html_document
