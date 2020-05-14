@@ -1,0 +1,270 @@
+---
+title: "hw7 churn"
+author: "Lyndon He"
+date: "4/4/2020"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(gmodels)
+library(tidyr)
+library(dplyr)
+library(statar)
+library(caret)
+```
+```{r}
+data.mobile = read.csv("mobile.csv")
+
+```
+```{r}
+#divide the data set
+data.mobile[,c("revenue","changer","mou","changem","overage","roam","threeway","months","uniqsubs","phones","custcare","retcalls","dropvce","blckvce","unansvce","eqpdays")] = scale(data.mobile[,c("revenue","changer","mou","changem","overage","roam","threeway","months","uniqsubs","phones","custcare","retcalls","dropvce","blckvce","unansvce","eqpdays")],center = TRUE,scale = TRUE)
+
+data.mobile = data.mobile %>% mutate(sweight = ifelse(churn==1,0.0194/0.5,(1-0.0194)/0.5))
+
+train.data = filter(data.mobile,training==1) 
+
+test.data = filter(data.mobile,training==0)
+
+validation.data = filter(data.mobile,is.na(training))
+
+#str(test.data)
+```
+```{r}
+#best subset
+library(leaps)
+#backward method
+sub = regsubsets(churn~.,train.data[,-c(1,3,4,35)],nvmax = 30, method = "backward") 
+which.min(summary(sub)$bic)
+which.min(summary(sub)$cp)
+which.max(summary(sub)$adjr2)
+summary(sub)
+
+#forward method
+sub2 = regsubsets(churn~.,train.data[,-c(1,3,4,35)],nvmax = 30, method = "forward") 
+which.min(summary(sub2)$bic)
+which.min(summary(sub2)$cp)
+which.max(summary(sub2)$adjr2)
+summary(sub2)
+```
+```{r}
+#logit model
+logit.mobile1 = glm(churn~changer+mou+changem+overage+roam+months+uniqsubs+phones+retcalls+eqpdays+refurb+creditaa+occprof, family= "binomial", train.data[,-c(1,3,4,35)], weights = train.data$sweight)
+summary(logit.mobile1)
+
+logit.mobile2 = glm(churn~.-revenue-children-prizmrur-mcycle-occcler-occstud-occhmkr-travel, family= "binomial", train.data[,-c(1,3,4,35)], weights = train.data$sweight)
+summary(logit.mobile2)
+
+logit.mobile3 = glm(churn~.-revenue-children-occcler-occstud-travel, family= "binomial", train.data[,-c(1,3,4,35)], weights = train.data$sweight)
+summary(logit.mobile3)
+
+AIC(logit.mobile1,logit.mobile2,logit.mobile3)
+
+```
+```{r}
+#prediction 
+pro1 = predict(logit.mobile1,validation.data[,-c(1,3,4,35)],type = "response")
+
+glm.pred = rep(0,length(pro1))
+
+glm.pred = ifelse(pro1>0.5,1,0)
+
+table(glm.pred, validation.data$churn)
+
+mean(glm.pred == validation.data$churn)
+
+```
+
+
+```{r}
+#knn method
+library(class)
+train.x = train.data[,c(6,7,8,9,10,12,13,14,20,21,24,27)]
+test.x = test.data[,c(6,7,8,9,10,12,13,14,20,21,24,27)]
+train.direction = train.data[,c(2)]
+
+set.seed(2)
+knn.pred = knn(train.x,test.x,train.direction,k=7)
+
+table(knn.pred,test.data[,c(2)])
+
+mean(knn.pred==test.data[,c(2)])
+#cross validation
+knn.cv(train.x,train.direction,k=3)
+```
+
+```{r}
+#lda method
+library(MASS)
+lda.fit = lda(churn~.-revenue-children-prizmrur-mcycle-occcler-occstud-occhmkr-travel, data=train.data[,-c(1,3,4,35)], prior = c(1-0.0194, 0.0194))
+
+lda.pred = predict(lda.fit, validation.data[,-c(1,3,4,35)])
+
+lda.class = lda.pred$class
+
+table(lda.class, validation.data$churn)
+
+mean(lda.class==validation.data$churn)
+```
+```{r}
+#qda method
+qda.fit = qda(churn~.-revenue-children-prizmrur-mcycle-occcler-occstud-occhmkr-travel, data=train.data[,-c(1,3,4,35)],prior = c(1-0.0194, 0.0194),method = "moment")
+
+qda.class =predict(qda.fit, validation.data[,-c(1,3,4,35)])$class
+
+table(qda.class, validation.data$churn)
+
+mean(qda.class==validation.data$churn)
+```
+
+
+```{r}
+#lasso
+library(glmnet)
+grid = 10^seq(10,-5,length=1000)
+
+y = train.data$churn
+x = model.matrix(churn~.,train.data[,-c(1,3,4,35)])[,-1]
+
+lasso.mod = glmnet(x,y,alpha = 1,lambda = grid,family = "binomial", weights = train.data$sweight)
+
+cv.out = cv.glmnet(x,y,alpha = 1,lambda = grid,family = "binomial",method = "class", weights = train.data$sweight)
+plot(cv.out)
+
+bestlan = cv.out$lambda
+bestlan
+
+#find the best conbimation of coefs
+lasso.coef = coef(cv.out, s = cv.out$lambda)
+
+lasso.pred = predict(lasso.mod,s=bestlan,newx = model.matrix(churn~.,validation.data[,-c(1,3,4,35)])[,-1])
+max(lasso.pred)
+lasso.pred1 = rep(0,length(lasso.pred))
+lasso.pred1 = as.list(ifelse(lasso.pred >0.5,1,0))
+
+table(lasso.pred1==validation.data$churn)
+
+mean(lasso.pred1==validation.data$churn)
+```
+
+
+```{r}
+#support vector machine
+library(kernlab)
+
+VECT = c(0.0194, 1-0.0194) 
+names(VECT) = c("1", "0") 
+
+svm.fit = ksvm(churn~.,train.data[,-c(1,3,4,35)],type = 'nu-svc', kernel = 'rbfdot')
+
+svm.results = predict(svm.fit,test.data[,-c(1,3,4,35)])
+
+table(svm.results,test.data$churn)
+mean(svm.results==test.data$churn)
+kappa(table(predict=svm.results,test=test.data$churn))
+```
+
+```{r}
+library(kernlab)
+
+KSVM = function(x,y){
+ type <- c('C-svc','nu-svc','C-bsvc','spoc-svc','kbb-svc')
+ kernel <- c('rbfdot','polydot','vanilladot','tanhdot')
+
+ #用于存放20种组合的预测结果
+ #用于存放20种组合的预测结果
+ pred = array(0, dim=c(nrow(x),5,4))
+ #用于存放预测错误数
+ errors = matrix(0,5,4)
+ dimnames(errors) = list(type, kernel)
+ for(i in 1:5){
+ for(j in 1:4){
+   pred[,i,j] <- predict(object = ksvm(x, y, type = type[i], kernel = kernel[j]), newdata = x)
+   errors[i,j] <- sum(pred[,i,j] != as.integer(y))
+
+ }
+ }
+ return(errors)
+}
+
+set.seed(1)
+#用部分sample来train model
+rand = sample(nrow(train.data),3000)
+
+model <- KSVM(x = as.matrix(train.data[rand,-c(1,2,3,4,35)]), y = train.data[rand,2])
+model
+# the best combination 'rbfdot'+'nu-svc'
+```
+
+```{r}
+# PCA method
+pca_trainset = train.data[,-c(churn,customer,training,representative,sweight)]
+
+
+pca_testset = test.data[,-c(churn,customer,training,representative,sweight)]
+
+pca_validationset = validation.data[,-c(churn,customer,training,representative,sweight)]
+
+pca = prcomp(pca_trainset)#, scale = TRUE)
+
+#standard deviation
+pr_var = (pca$sdev)^2
+
+#proportion of std
+pro_varex = pr_var/sum(pr_var)
+
+plot(pro_varex, xlab = "Principal Component", ylab = "Proportion of Variance Explained", type = "b")
+
+plot(cumsum(pro_varex),xlab = "Principal Component", ylab = "Cumulative Proportion of Variance Expained", type ="b")
+```
+```{r}
+# reduce the dimension of data
+train.temp = data.frame(churn = train.data$churn,pca$x)
+
+test.temp = as.data.frame(predict(pca,newdata = pca_testset))
+
+new_trainset = train.temp[,1:26]
+new_testset = test.temp[,1:25]
+
+```
+
+
+```{r}
+library(neuralnet)
+library(nnet)
+
+# apply neural model to data after acquiring from PCA
+name = names(new_trainset)
+formula = as.formula(paste("churn~", paste(name[!name %in% "churn"],collapse = "+")))
+
+# head(new_trainset)
+nn = neuralnet(formula, data = new_trainset, hidden = 10, linear.output = FALSE, act.fct = "logistic"， threshold = 0.01)
+
+```
+
+```{r}
+plot(nn)
+
+#测试方法1
+nn.results = compute(nn,new_testset)
+nn.results.pred = ifelse(nn.results$net.result>0.5,1,0) 
+
+results = data.frame(actual =test.data$churn, prediction=nn.results.pred)
+
+t =table(results)
+print(confusionMatrix(t))
+```
+
+
+```{r}
+t.temp = as.data.frame(predict(pca,newdata = pca_validationset))
+new_t = t.temp[,1:29]
+data.vali.probs = predict(nn, newdata = new_t)
+data.vali.pred = ifelse(data.vali.probs>0.5,1,0)
+table(data.vali.pred,validation.data$churn)
+mean(data.vali.pred==validation.data$churn)
+```
+
+
+
+```{r}
